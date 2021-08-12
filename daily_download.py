@@ -2,19 +2,28 @@
 #Author: Blastomussa
 #Date 8/7/2021
 import time
-import http.client
 import json
 import requests
 import os
 import configparser
 from jwt_token import *
+import sys, errno # error handling
+from socket import gaierror # error handling
 
 # load config.ini to set global variables
-config = configparser.ConfigParser()
-config.read('config.ini')
-recording_root = config['PATH']['RECORDING_ROOT']
-LOG = config['PATH']['LOG']
-RUN_LOG = config['PATH']['RUN_LOG']
+try:
+    config = configparser.ConfigParser()
+    config.read('config.ini')
+    recording_root = config['PATH']['RECORDING_ROOT']
+    LOG = config['PATH']['LOG']
+    RUN_LOG = config['PATH']['RUN_LOG']
+except configparser.Error:
+    print("Configuration Error...config.ini not found")
+    exit()
+except KeyError:
+    print("Configuration Error...config.ini not found")
+    exit()
+
 
 # get start time for run log
 t = time.localtime() # get struct_time
@@ -22,13 +31,20 @@ start_date = time.strftime("%m/%d/%Y", t)
 start_time = time.strftime("%H:%M:%S", t)
 
 # get api request and convert response to json
-def get_request(header, connection, api_call):
-    connection.request("GET", api_call, headers=header)
-    response = connection.getresponse()
-    data = response.read()
-    d = data.decode("utf-8")
-    json_data = json.loads(d)
-    return json_data
+def get_request(api_call):
+    try:
+        connection, header = init_connection()
+        connection.request("GET", api_call, headers=header)
+        response = connection.getresponse()
+        data = response.read()
+        d = data.decode("utf-8")
+        json_data = json.loads(d)
+        return json_data
+    # catch socket error in case of lost connection
+    # -------------------->>>might need to add more exceptions
+    except gaierror as e:
+        log_run(start_date, "Failed to Connect",0,0)
+        raise SystemExit(e)
 
 
 # write log to csv file; path to log in config.ini
@@ -56,8 +72,13 @@ def log_results(date, date_time, id, host, topic, path):
     return status
 
 
-def log_run(start_date, start, end, success, fails):
+def log_run(start_date, start, success, fails):
     total_attemps = str(success + fails)
+
+    # get end time of program
+    t = time.localtime() # get struct_time
+    end = time.strftime("%H:%M:%S", t)
+
     # check for log file, create if not found
     if(os.path.isfile(RUN_LOG) == False):
         file = open(RUN_LOG, "w")
@@ -85,15 +106,27 @@ def check_paths(staff_root,topic_path):
 
 # download mp4 file in 1024 byte chunks
 def download_video(url,file_path):
-    r = requests.get(url, stream = True)
-    with open(file_path, "wb") as video:
-    	for chunk in r.iter_content(chunk_size = 1024):
-    		if chunk:
-    			video.write(chunk)
+    # add error handling; broken pipe
+    try:
+        r = requests.get(url, stream = True)
+        r.raise_for_status()
+        with open(file_path, "wb") as video:
+        	for chunk in r.iter_content(chunk_size = 1024):
+        		if chunk:
+        			video.write(chunk)
+    # handle error; downloads will flag as failed in log_results with path check
+    except IOError as e:
+        pass
+    except requests.exceptions.Timeout:
+        pass
+    except requests.exceptions.HTTPError as err:
+        pass
+    except requests.exceptions.RequestException as e:
+        pass
 
 
 # get recording info, download/organize files, log results
-def get_recordings(header, connection, meetings):
+def get_recordings(meetings):
     # accumulator
     number_of_downloads = 0
     number_of_fails = 0
@@ -107,11 +140,11 @@ def get_recordings(header, connection, meetings):
 
         # get meeting info with download_url/token
         api_call = "/v2/meetings/" + id + "/recordings?include_fields=download_access_token"
-        details = get_request(header,connection,api_call)
+        details = get_request(api_call)
 
         # get host details
         api_call = "/v2/users/" + details['host_id']
-        host = get_request(header,connection,api_call)
+        host = get_request(api_call)
 
         # recording variables
         host_name = host["first_name"] + "_" + host["last_name"]
@@ -162,19 +195,16 @@ def get_recordings(header, connection, meetings):
 
 # called by main.py
 def daily_download():
-    # establish https connection and authorization header (from jwt_token.py)
-    connection, header = init_connection()
-
     # create api call to get recordings info from today dynamically
     t = time.localtime()
     date = time.strftime("%Y-%m-%d", t)
-    rec_call = "/v2/accounts/me/recordings?page_size=300&from=" + date
+    #recordings_call = "/v2/accounts/me/recordings?page_size=300&from=" + date
 
             #--------------->TEST CALL<----------------#
-    #rec_call = "/v2/accounts/me/recordings?from=2021-07-09&page_size=300"
+    recordings_call = "/v2/accounts/me/recordings?from=2021-07-013&page_size=300"
 
     # get recordings json
-    recordings = get_request(header, connection, rec_call)
+    recordings = get_request(recordings_call)
 
     # if there are 0 recordings exit and log
     if(int(recordings["total_records"]) == 0):
@@ -185,7 +215,7 @@ def daily_download():
     meetings = recordings["meetings"]
 
     # get recording info and download videos; log fails and success
-    number_of_downloads, number_of_fails = get_recordings(header, connection, meetings)
+    number_of_downloads, number_of_fails = get_recordings(meetings)
 
     # set next page token for pagination and to test for empty
     next_page_token = recordings["next_page_token"]
@@ -193,26 +223,23 @@ def daily_download():
     # while next page token is not empty download meetings; handles multi pages
     while(next_page_token != ""):
         # create next page call
-        api_call = rec_call + "&next_page_token=" + next_page_token
+        api_call = recordings_call + "&next_page_token=" + next_page_token
 
         # get recordings json and meetings list
-        recordings = get_request(header, connection, api_call)
+        recordings = get_request(api_call)
         meetings = recordings["meetings"]
 
         # if there isn't a next page, token is empty
         next_page_token = recordings["next_page_token"]
 
         # download recordings from next page
-        d,f = get_recordings(header, connection, meetings)
+        d,f = get_recordings(meetings)
         number_of_downloads = number_of_downloads + d
         number_of_fails = number_of_fails + f
 
-    # get end time of program
-    t = time.localtime() # get struct_time
-    end_time = time.strftime("%H:%M:%S", t)
-
     # write to run_log
-    log_run(start_date, start_time, end_time, number_of_downloads, number_of_fails)
+    log_run(start_date, start_time, number_of_downloads, number_of_fails)
+    return 0
 
 
 if __name__ == '__main__':
