@@ -4,7 +4,7 @@
 # gets all recordings from an account and logs them to csv file
 # download 75 months worth of cloud recording details
 # meant to run as a standalone script to generate full list of recordings
-# over a specific time frame
+# over a specific time frame: MONTHS variables
 import os
 import json
 import time
@@ -12,6 +12,8 @@ import configparser
 from jwt_token import *
 from datetime import date, timedelta
 
+# how many months back to you want to download ids for
+MONTHS = 75
 
 # set log file location
 try:
@@ -24,9 +26,6 @@ except configparser.Error:
 except KeyError:
     print("Configuration Error...config.ini not found")
     exit()
-
-# how many months back to you want to download ids for
-MONTHS = 75
 
 # get api request and convert response to json
 def get_request(api_call):
@@ -44,19 +43,13 @@ def get_request(api_call):
 
 
 def get_info(meetings):
-    # create log if it doesnt exist and open file
-    if(os.path.isfile(LOG) == False):
-        file = open(LOG, "w")
-        head = "id,start_time\n"
-        file.writelines(head)
-        file.close()
-    file = open(LOG, "a")
+    # create log
+    file = open(LOG, "w")
+    head = "id,start_time\n"
+    file.writelines(head)
 
     # loop over meetings list
-    index = len(meetings)
-    while(index > 0):
-        index = index - 1
-        meeting = meetings[index]
+    for meeting in meetings:
         id = meeting["uuid"]
         start_time = meeting["start_time"]
 
@@ -91,6 +84,7 @@ def main():
 
         # log recording info to csv
         get_info(meetings)
+
 
 if __name__ == '__main__':
     main()
