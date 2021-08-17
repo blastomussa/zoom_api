@@ -1,13 +1,14 @@
 #!/usr/bin/env python3
 #Author: Blastomussa
 #Date 8/7/2021
+# Downloads all Zoom cloud recordings from current day
+import os
 import time
 import json
 import requests
-import os
 import configparser
 from jwt_token import *
-import sys, errno # error handling
+#import sys, errno # error handling
 from socket import gaierror # error handling
 
 # load config.ini to set global variables
@@ -24,10 +25,10 @@ except KeyError:
     print("Configuration Error...config.ini not found")
     exit()
 
-
+# --------------->>>change all times for logs to ISO time format
 # get start time for run log
 t = time.localtime() # get struct_time
-start_date = time.strftime("%m/%d/%Y", t)
+start_date = time.strftime("%Y-%m-%d", t)
 start_time = time.strftime("%H:%M:%S", t)
 
 # get api request and convert response to json
@@ -106,7 +107,6 @@ def check_paths(staff_root,topic_path):
 
 # download mp4 file in 1024 byte chunks
 def download_video(url,file_path):
-    # add error handling; broken pipe
     try:
         r = requests.get(url, stream = True)
         r.raise_for_status()
@@ -119,9 +119,11 @@ def download_video(url,file_path):
         pass
     except requests.exceptions.Timeout:
         pass
-    except requests.exceptions.HTTPError as err:
+    except requests.exceptions.HTTPError:
         pass
-    except requests.exceptions.RequestException as e:
+    except requests.exceptions.RequestException:
+        pass
+    except requests.exceptions.ConnectionError:
         pass
 
 
@@ -132,10 +134,7 @@ def get_recordings(meetings):
     number_of_fails = 0
 
     # loop over meetings list
-    index = len(meetings)
-    while(index > 0):
-        index = index - 1
-        meeting = meetings[index]
+    for meeting in meetings:
         id = meeting["uuid"]
 
         # get meeting info with download_url/token
@@ -156,10 +155,7 @@ def get_recordings(meetings):
         rec_files = details["recording_files"]
 
         # loop through files list to get download_url for mp4 file
-        length_files = len(rec_files)
-        while(length_files > 0):
-            length_files = length_files - 1
-            file = rec_files[length_files]
+        for file in rec_files:
             if(file["file_type"] == "MP4"):
                 mp4_url = file["download_url"]
 
@@ -198,10 +194,10 @@ def daily_download():
     # create api call to get recordings info from today dynamically
     t = time.localtime()
     date = time.strftime("%Y-%m-%d", t)
-    #recordings_call = "/v2/accounts/me/recordings?page_size=300&from=" + date
+    recordings_call = "/v2/accounts/me/recordings?page_size=300&from=" + date
 
             #--------------->TEST CALL<----------------#
-    recordings_call = "/v2/accounts/me/recordings?from=2021-07-013&page_size=300"
+    #recordings_call = "/v2/accounts/me/recordings?from=2021-07-013&page_size=300"
 
     # get recordings json
     recordings = get_request(recordings_call)
